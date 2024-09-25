@@ -3,7 +3,7 @@
 -- SPDX-License-Identifier: MPL-2.0
 
 local termX, termY = term.getSize()
-local buseng = {}
+local buseng = {} --framebuffer helper
 do
 	local framebuffer = {}
 	for y=1,termY do
@@ -47,6 +47,8 @@ do
 		end
 	end
 end
+
+
 -- set colors
 local teal = colors.cyan
 local cyan = colors.pink
@@ -58,15 +60,33 @@ local red = colors.red
 local black = colors.black
 local white = colors.white
 
-term.setPaletteColor(teal,0x36BECC)
-term.setPaletteColor(cyan, 0x77DAD4)
-term.setPaletteColor(brown, 0x876107)
-term.setPaletteColor(red, 0x890D00)
-term.setPaletteColor(orange,0xD1871B)
-term.setPaletteColor(yellow, 0xEBC543)
-term.setPaletteColor(gray,0x656565)
+local function dayPaletteColors() --for when I add the daylight cycle like in the real game
+	term.setPaletteColor(teal,0x36BECC)
+	term.setPaletteColor(cyan, 0x77DAD4)
+	term.setPaletteColor(brown, 0x876107)
+	term.setPaletteColor(red, 0x890D00)
+	term.setPaletteColor(orange,0xD1871B)
+	term.setPaletteColor(yellow, 0xEBC543)
+	term.setPaletteColor(gray,0x656565)
+end
+dayPaletteColors()
+
+-- game settings
+if not settings.get("desertbus.points") then
+	settings.define("desertbus.points", {
+		description = "Amount of points earned (DO NOT EDIT)",
+		default = 0,
+		type = "number",
+	})
+	settings.save()
+end
+
+local points = settings.get("desertbus.points")
 
 -- game logic
+local oldPullEvent = os.pullEvent
+os.pullEvent = os.pullEventRaw
+
 local addFrameNum = 4 --amount of frames between the bus moving right
 if termX > 81 then
 	addFrameNum = 2
@@ -79,62 +99,99 @@ local fromMid = 0 --ofset of the road from the center of the screen
 local roadStart = math.floor((termY-4) * (1/3)) --where the skybox ends and road begins
 local maxRoadSize = math.floor((termX-4) * (1/3)) --the offset from the center where you game over
 local timer = 0 --used to make sure the game ends after 8 hours
+local winTime = 8*60*60
+
+local function renderRoad(mid) --renders the actual game
+	for y=1,roadStart-2 do
+		buseng.write(1,y,(" "):rep(termX),teal,teal)
+	end
+	buseng.write(1,roadStart-1,(" "):rep(termX),cyan,cyan)
+	for y=roadStart,termY do
+		local offsetX = y --originally was going to do some math for perspective, now just used to make the code easier to read
+		-- draws the road and the desert background
+		-- its not a driving game without a road
+		for x=1,termX do
+			if x > mid-(2+offsetX) and x < mid+(2+offsetX) then
+				buseng.setChar(x,y," ",gray,gray) -- road
+			elseif x > mid-(6+offsetX) and x < mid+(6+offsetX) then
+				buseng.setChar(x,y,"\127",black,brown) -- road border
+			else
+				buseng.setChar(x,y," ",orange,orange) -- desert background
+			end
+		end
+		-- draw road stripes
+		-- drawn after the road itself so we don't have to make
+		-- the road avoid the center
+		if (y-offset) % 5 == 0 then
+			buseng.setChar(mid,y," ",gray,gray)
+		else
+			buseng.setChar(mid,y," ",yellow,yellow)
+		end
+	end
+	buseng.write(1,1,"DesertBusCC v1.1",colors.white,colors.black)
+end
+
 local function mainLoop()
 	while true do
-		local mid = math.floor(termX/2 + 0.5) - fromMid
-		for y=1,roadStart-2 do
-			buseng.write(1,y,(" "):rep(termX),teal,teal)
-		end
-		buseng.write(1,roadStart-1,(" "):rep(termX),cyan,cyan)
-		for y=roadStart,termY do
-			local offsetX = y --originally was going to do some math for perspective, now just used to make the code easier to read
-			-- draws the road and the desert background
-			-- its not a driving game without a road
-			for x=1,termX do
-				if x > mid-(2+offsetX) and x < mid+(2+offsetX) then
-					buseng.setChar(x,y," ",gray,gray) -- road
-				elseif x > mid-(6+offsetX) and x < mid+(6+offsetX) then
-					buseng.setChar(x,y,"\127",black,brown) -- road border
-				else
-					buseng.setChar(x,y," ",orange,orange) -- desert background
-				end
-			end
-			-- draw road stripes
-			-- drawn after the road itself so we don't have to make
-			-- the road avoid the center
-			if (y-offset) % 5 == 0 then
-				buseng.setChar(mid,y," ",gray,gray)
-			else
-				buseng.setChar(mid,y," ",yellow,yellow)
-			end
-		end
-		buseng.write(1,1,"DesertBusCC v1.0",colors.white,colors.black)
-		if timer > 8*60*60 then --8 hours exactly
-			buseng.write(1,2,"You won Desert Bus!",colors.white,colors.black)
-			break
-		else
-			buseng.write(1,2,"Running for "..math.floor(timer).." seconds",colors.white,colors.black)
-		end
+		-- resetting game state
+		offset = 0
+		timer = 0
+		fromMid = 0
+		dayPaletteColors()
+		
+		-- game countdown
+		renderRoad(math.floor(termX/2 + 0.5))
+		buseng.write(1,2,"Starting in 3..",colors.white,colors.black)
 		buseng.draw()
-		sleep(1/17) --game run at 17fps
-		timer = timer + (1/17) --works if the game actually runs at full speed
-		offset = offset + 1 --
-		if offset >= roadStart then
-			offset = 0 --rset time
-		end
-		if offset % addFrameNum == 0 or offset % addFrameNum == addFrameNum then
-			if math.abs(fromMid) > maxRoadSize then --end the game if the bus goes off the road
-				buseng.write(1,3,"The bus went offroad and broke down!",colors.white,colors.black)
+		sleep(1)
+		buseng.write(1,2,"Starting in 3..2..",colors.white,colors.black)
+		buseng.draw()
+		sleep(1)
+		buseng.write(1,2,"Starting in 3..2..1..",colors.white,colors.black)
+		buseng.draw()
+		sleep(1)
+		buseng.write(1,2,"Starting!",colors.white,colors.black)
+		buseng.draw()
+		
+		while true do
+			local mid = math.floor(termX/2 + 0.5) - fromMid
+			renderRoad(mid)
+			if timer > winTime then --8 hours exactly
+				buseng.write(1,2,"Trip completed! Turning back... (+1 point)",colors.white,colors.black)
+				points = points + 1
 				buseng.draw()
 				break
+			else
+				buseng.write(1,2,"Running for "..math.floor(timer).." seconds",colors.white,colors.black)
+				buseng.write(1,3,"Completed mile "..(math.floor(timer/80*10)/10).."/360",colors.white,colors.black)
 			end
-			fromMid = fromMid + 1 -- move the bus right
+			buseng.draw()
+			sleep(1/17) --game run at 17fps
+			timer = timer + (1/17) --works if the game actually runs at full speed
+			offset = offset + 1 --
+			if offset >= roadStart then
+				offset = 0 --rset time
+			end
+			if offset % addFrameNum == 0 or offset % addFrameNum == addFrameNum then
+				if math.abs(fromMid) > maxRoadSize then --end the game if the bus goes off the road
+					buseng.write(1,3,"The bus went offroad and broke down!",colors.white,colors.black)
+					buseng.draw()
+					break
+				end
+				fromMid = fromMid + 1 -- move the bus right
+			end
 		end
+		sleep(3)
 	end
 end
 local function inputLoop()
 	while true do
-		local _,key,held = os.pullEvent("key")
+		local event,key,held = os.pullEventRaw("key","terminate")
+		if event == "terminate" then
+			settings.set("desertbus.points",points)
+			settings.save()
+			break
+		end
 		if key == keys.right or key == keys.d then
 			fromMid = fromMid + movementAmount
 		elseif key == keys.left or key == keys.a then
@@ -144,7 +201,11 @@ local function inputLoop()
 end
 parallel.waitForAny(mainLoop,inputLoop)
 
-sleep(5) --so you can take screenshots
+settings.set("desertbus.points",points)
+settings.save()
+
+os.pullEvent = oldPullEvent
+
 for i=0,15 do --reset colors to native
 	term.setPaletteColor(math.pow(2,i),term.nativePaletteColor(math.pow(2,i)))
 end
